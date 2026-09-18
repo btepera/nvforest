@@ -23,6 +23,7 @@ jobs:
       - conda-python-build
       - conda-python-tests
       - docs-build
+      - docs-build-matrix
       - publish-api-docs
       - telemetry-setup
       - wheel-build-libnvforest
@@ -67,6 +68,13 @@ jobs:
           repo: ${{ github.repository }}
           target-branch: ${{ fromJSON(steps.get-pr-info.outputs.pr-info).base.ref }}
           max-days-without-success: 7
+      - name: Check if link checks are passing
+        uses: rapidsai/shared-actions/check_nightly_success/dispatch@main
+        with:
+          repo: ${{ github.repository }}
+          target-branch: ${{ fromJSON(steps.get-pr-info.outputs.pr-info).base.ref }}
+          workflow-id: link-checks.yaml
+          max-days-without-success: 14
   changed-files:
     needs: telemetry-setup
     permissions:
@@ -201,7 +209,7 @@ jobs:
       build_type: pull-request
       node_type: "cpu8"
       arch: "amd64"
-      container_image: "rapidsai/ci-conda:26.10-latest"
+      container_image: "rapidsai/ci-conda:26.12-latest"
       script: "ci/run_clang_tidy.sh"
   conda-cpp-build-cpu:
     needs: [build-details, checks, changed-files]
@@ -219,7 +227,7 @@ jobs:
       build-datetime: ${{ needs.build-details.outputs.build-datetime }}
       node_type: cpu16
       arch: "amd64"
-      container_image: "rapidsai/ci-conda:26.10-latest"
+      container_image: "rapidsai/ci-conda:26.12-latest"
       script: "env NVFOREST_EXTRA_CMAKE_ARGS=-DNVFOREST_ENABLE_GPU=OFF ci/build_cpp.sh"
   conda-cpp-build:
     needs: [build-details, checks]
@@ -293,8 +301,15 @@ jobs:
       build_type: pull-request
       script: "ci/test_python.sh"
       run_codecov: false
+  docs-build-matrix:
+    permissions:
+      contents: read
+    uses: rapidsai/shared-workflows/.github/workflows/compute-matrix.yaml@main
+    with:
+      build_type: pull-request
+      matrix_name: docs-build
   docs-build:
-    needs: [conda-python-build, changed-files]
+    needs: [docs-build-matrix, conda-python-build, changed-files]
     permissions:
       actions: read
       contents: read
@@ -303,12 +318,15 @@ jobs:
       pull-requests: read
     secrets: inherit # zizmor: ignore[secrets-inherit]
     uses: rapidsai/shared-workflows/.github/workflows/custom-job.yaml@main
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.docs-build-matrix.outputs.matrix) }}
     if: fromJSON(needs.changed-files.outputs.changed_file_groups).build_docs
     with:
       build_type: pull-request
-      node_type: gpu-l4-latest-1
-      arch: "amd64"
-      container_image: "rapidsai/ci-conda:26.10-latest"
+      node_type: "gpu-${{ matrix.GPU }}-${{ matrix.DRIVER }}-1"
+      arch: "${{ matrix.arch }}"
+      container_image: "rapidsai/ci-conda:26.12-cuda${{ matrix.CUDA_VER }}-${{ matrix.LINUX_VER }}-py${{ matrix.PY_VER }}"
       script: "ci/build_docs.sh"
   publish-api-docs:
     needs: [docs-build]
@@ -329,7 +347,6 @@ jobs:
     with:
       docs-projects: nvforest
       dry-run: true
-      version-map: ${{ vars.VERSION_MAP }}
   wheel-build-libnvforest:
     needs: [build-details, checks]
     permissions:
